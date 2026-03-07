@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>إزالة الكتابات من الفيديو بالذكاء الاصطناعي</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>موقع إزالة الكتابات الأسطوري</h1>
+        <p>ارفع فيديو يحتوي على كتابات، وسيتم إزالتها تلقائيًا!</p>
+        <form method="post" enctype="multipart/form-data">
+            <input type="file" name="file" accept="video/*">
+            <button type="submit">ابدأ الإزالة</button>
+        </form>
+        {% if error %}
+            <p class="error">{{ error }}</p>
+        {% endif %}
+        <div class="loading" id="loading">جاري المعالجة...</div>
+    </div>
+    <script>
+        document.querySelector('form').addEventListener('submit', function() {
+            document.getElementById('loading').style.display = 'block';
+        });
+    </script>
+</body>
+</html>
