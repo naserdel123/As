@@ -1,0 +1,77 @@
+body {
+    background: linear-gradient(to right, #0f0c29, #302b63, #24243e);
+    color: white;
+    font-family: Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin: 0;
+}
+
+.container {
+    text-align: center;
+    background: rgba(255, 255, 255, 0.1);
+    padding: 40px;
+    border-radius: 20px;
+    box-shadow: 0 0 20px rgba(255, 255, 255, 0.2);
+    animation: fadeIn 2s ease-in-out;
+}
+
+h1 {
+    font-size: 2.5em;
+    animation: glow 2s infinite alternate;
+}
+
+input[type="file"] {
+    margin: 20px 0;
+    padding: 10px;
+    border: none;
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+    border-radius: 10px;
+}
+
+button {
+    padding: 15px 30px;
+    background: #ff00ff;
+    border: none;
+    color: white;
+    font-size: 1.2em;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: transform 0.3s, box-shadow 0.3s;
+}
+
+button:hover {
+    transform: scale(1.1);
+    box-shadow: 0 0 15px #ff00ff;
+}
+
+.loading {
+    display: none;
+    margin-top: 20px;
+    font-size: 1.2em;
+    animation: pulse 1.5s infinite;
+}
+
+.error {
+    color: red;
+    margin-top: 10px;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-50px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes glow {
+    from { text-shadow: 0 0 10px #fff; }
+    to { text-shadow: 0 0 20px #ff00ff; }
+}
+
+@keyframes pulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+    100% { transform: scale(1); }
+}
