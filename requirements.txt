@@ -1,0 +1,4 @@
+flask
+gunicorn
+opencv-python-headless   # ← مهم: headless عشان السيرفر
+numpy
