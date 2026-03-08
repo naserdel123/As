@@ -1,0 +1,377 @@
+"""
+=============================================================================
+تطبيق Flask لإزالة النصوص من الفيديو باستخدام OpenCV DNN + DB Model
+Flask App for Text Removal from Video using OpenCV DNN + DB Model
+=============================================================================
+
+المؤلف: Assistant
+التاريخ: 2026-03-08
+الوصف: تطبيق ويب بسيط لرفع فيديو وإزالة النصوص منه باستخدام نموذج Differentiable Binarization
+
+للتشغيل محليًا:
+    python app.py
+
+للنشر على Render:
+    Start Command: gunicorn app:app --bind 0.0.0.0:$PORT
+"""
+
+import os
+import cv2
+import numpy as np
+import logging
+from flask import Flask, render_template, request, send_file, flash, redirect, url_for
+from werkzeug.utils import secure_filename
+
+# =============================================================================
+# إعدادات التسجيل واللوجينغ / Logging Configuration
+# =============================================================================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# =============================================================================
+# إعدادات Flask / Flask Configuration
+# =============================================================================
+app = Flask(__name__)
+app.secret_key = 'your-secret-key-change-in-production-12345'
+
+# المجلدات / Directories
+UPLOAD_FOLDER = 'uploads'
+OUTPUT_FOLDER = 'outputs'
+MODELS_FOLDER = 'models'
+ALLOWED_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv'}
+
+# إنشاء المجلدات إذا لم تكن موجودة / Create directories if not exist
+for folder in [UPLOAD_FOLDER, OUTPUT_FOLDER, MODELS_FOLDER]:
+    os.makedirs(folder, exist_ok=True)
+
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
+
+# مسار النموذج / Model path
+MODEL_PATH = os.path.join(MODELS_FOLDER, 'DB_TD500_resnet18.onnx')
+
+
+# =============================================================================
+# الدوال المساعدة / Helper Functions
+# =============================================================================
+
+def allowed_file(filename):
+    """
+    التحقق من امتداد الملف المسموح به
+    Check if file extension is allowed
+    """
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def check_model_exists():
+    """
+    التحقق من وجود ملف النموذج
+    Check if model file exists
+    """
+    if not os.path.exists(MODEL_PATH):
+        logger.error(f"Model file not found: {MODEL_PATH}")
+        return False, f"نموذج التعرف على النصوص غير موجود: {MODEL_PATH}<br>Model not found: DB_TD500_resnet18.onnx"
+    return True, None
+
+
+def initialize_text_detector():
+    """
+    تهيئة كاشف النصوص باستخدام cv2.dnn.TextDetectionModel_DB
+    Initialize text detector using cv2.dnn.TextDetectionModel_DB
+    """
+    try:
+        # إنشاء كاشف النصوص / Create text detector
+        # ملاحظة: TextDetectionModel_DB يتطلب OpenCV 4.5.1+
+        detector = cv2.dnn.TextDetectionModel_DB(MODEL_PATH)
+        
+        # إعدادات المعالجة المسبقة / Preprocessing settings
+        # المعاملات: scale, size, mean, swapRB, crop
+        detector.setInputParams(
+            scale=1.0 / 255.0,           # تطبيع القيم / Normalize values
+            size=(736, 736),              # حجم الإدخال المطلوب / Required input size
+            mean=(122.67891434, 116.66876762, 104.00698793),  # متوسط ImageNet BGR
+            swapRB=True,                  # تبديل الأحمر والأزرق / Swap Red and Blue
+            crop=False                    # عدم القص / Don't crop
+        )
+        
+        # إعدادات خوارزمية DB / DB Algorithm settings
+        detector.setBinaryThreshold(0.3)     # عتبة الثنائية / Binary threshold
+        detector.setPolygonThreshold(0.5)    # عتبة المضلع / Polygon threshold
+        detector.setUnclipRatio(2.0)         # نسبة التوسع / Unclip ratio
+        detector.setMaxCandidates(200)       # الحد الأقصى للمناطق / Max candidates
+        
+        logger.info("Text detector initialized successfully")
+        return detector
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize text detector: {str(e)}")
+        raise
+
+
+def process_video_frame(frame, detector):
+    """
+    معالجة إطار واحد: اكتشاف النصوص وإزالتها
+    Process single frame: detect and remove text
+    """
+    try:
+        # نسخة للعرض / Copy for display
+        result_frame = frame.copy()
+        height, width = frame.shape[:2]
+        
+        # إنشاء قناع / Create mask
+        mask = np.zeros((height, width), dtype=np.uint8)
+        
+        # اكتشاف النصوص / Detect text
+        # الناتج: قائمة بالمربعات وقائمة بالثقة
+        # Output: list of boxes and list of confidences
+        detections = detector.detect(frame)
+        
+        if detections[0] is not None:
+            boxes = detections[0]
+            confidences = detections[1] if len(detections) > 1 else [1.0] * len(boxes)
+            
+            # معالجة كل منطقة مكتشفة / Process each detected region
+            for i, (box, conf) in enumerate(zip(boxes, confidences)):
+                # التحقق من الثقة / Check confidence
+                if conf < 0.5:
+                    continue
+                
+                # box يمكن أن يكون:
+                # - صندوق محوري: [x, y, w, h]
+                # - رباعي: [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
+                
+                if isinstance(box, np.ndarray):
+                    box = np.array(box)
+                    
+                    # إذا كان الشكل (4, 2) - رباعي / If shape is (4, 2) - quadrilateral
+                    if len(box.shape) == 2 and box.shape[0] == 4:
+                        # تحويل إلى صيغة fillPoly / Convert to fillPoly format
+                        pts = box.reshape((-1, 1, 2)).astype(np.int32)
+                        cv2.fillPoly(mask, [pts], 255)
+                        
+                    # إذا كان الشكل (4,) - صندوق محوري / If shape is (4,) - axis-aligned box
+                    elif len(box.shape) == 1 and len(box) == 4:
+                        x, y, w, h = map(int, box)
+                        cv2.rectangle(mask, (x, y), (x + w, y + h), 255, -1)
+                        
+                    # إذا كان الشكل (4, 1, 2) / If shape is (4, 1, 2)
+                    elif len(box.shape) == 3:
+                        pts = box.reshape((-1, 1, 2)).astype(np.int32)
+                        cv2.fillPoly(mask, [pts], 255)
+        
+        # تطبيق inpainting لإزالة النصوص / Apply inpainting to remove text
+        # cv2.INPAINT_TELEA: خوارزمية Fast Marching Method
+        # cv2.INPAINT_NS: خوارزمية Navier-Stokes
+        if np.any(mask > 0):
+            result_frame = cv2.inpaint(result_frame, mask, 3, cv2.INPAINT_TELEA)
+        
+        return result_frame, mask
+        
+    except Exception as e:
+        logger.error(f"Error processing frame: {str(e)}")
+        raise
+
+
+def process_video(input_path, output_path):
+    """
+    معالجة الفيديو كاملاً: قراءة، معالجة الإطارات، كتابة
+    Process entire video: read, process frames, write
+    """
+    detector = None
+    cap = None
+    out = None
+    
+    try:
+        # التحقق من النموذج / Check model
+        model_ok, error_msg = check_model_exists()
+        if not model_ok:
+            raise FileNotFoundError(error_msg)
+        
+        # تهيئة الكاشف / Initialize detector
+        logger.info("Initializing text detector...")
+        detector = initialize_text_detector()
+        
+        # فتح الفيديو / Open video
+        logger.info(f"Opening video: {input_path}")
+        cap = cv2.VideoCapture(input_path)
+        
+        if not cap.isOpened():
+            raise ValueError("Cannot open video file")
+        
+        # معلومات الفيديو / Video info
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        logger.info(f"Video info: {width}x{height}, {fps} FPS, {total_frames} frames")
+        
+        # إعداد VideoWriter / Setup VideoWriter
+        # استخدام كوديك H.264 إذا كان متاحاً / Use H.264 codec if available
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # أو 'avc1', 'H264'
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        
+        if not out.isOpened():
+            # محاولة كوديك بديل / Try alternative codec
+            fourcc = cv2.VideoWriter_fourcc(*'XVID')
+            out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        
+        frame_count = 0
+        
+        # معالجة الإطارات / Process frames
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # معالجة الإطار / Process frame
+            processed_frame, _ = process_video_frame(frame, detector)
+            
+            # كتابة الإطار / Write frame
+            out.write(processed_frame)
+            
+            frame_count += 1
+            
+            # تسجيل التقدم كل 30 إطار / Log progress every 30 frames
+            if frame_count % 30 == 0:
+                progress = (frame_count / total_frames) * 100 if total_frames > 0 else 0
+                logger.info(f"Processed {frame_count}/{total_frames} frames ({progress:.1f}%)")
+        
+        logger.info(f"Video processing completed: {frame_count} frames processed")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Video processing error: {str(e)}")
+        raise
+        
+    finally:
+        # تنظيف الموارد / Cleanup resources
+        if cap is not None:
+            cap.release()
+        if out is not None:
+            out.release()
+        logger.info("Resources released")
+
+
+# =============================================================================
+# Routes / المسارات
+# =============================================================================
+
+@app.route('/')
+def index():
+    """
+    الصفحة الرئيسية / Home page
+    """
+    return render_template('index.html')
+
+
+@app.route('/process', methods=['POST'])
+def process():
+    """
+    معالجة الفيديو المرفوع / Process uploaded video
+    """
+    try:
+        # التحقق من وجود ملف / Check if file exists
+        if 'video' not in request.files:
+            flash('لم يتم اختيار ملف فيديو / No video file selected', 'error')
+            return redirect(url_for('index'))
+        
+        file = request.files['video']
+        
+        # التحقق من اسم الملف / Check filename
+        if file.filename == '':
+            flash('لم يتم اختيار ملف / No file selected', 'error')
+            return redirect(url_for('index'))
+        
+        # التحقق من الامتداد / Check extension
+        if not allowed_file(file.filename):
+            flash('نوع الملف غير مدعوم. استخدم MP4, AVI, MOV, MK4 / Unsupported file type', 'error')
+            return redirect(url_for('index'))
+        
+        # حفظ الملف / Save file
+        filename = secure_filename(file.filename)
+        input_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        output_filename = f"cleaned_{filename.rsplit('.', 1)[0]}.mp4"
+        output_path = os.path.join(OUTPUT_FOLDER, output_filename)
+        
+        logger.info(f"Saving uploaded file: {input_path}")
+        file.save(input_path)
+        
+        # معالجة الفيديو / Process video
+        logger.info("Starting video processing...")
+        process_video(input_path, output_path)
+        
+        # التحقق من إنشاء الملف / Check if file created
+        if not os.path.exists(output_path):
+            raise FileNotFoundError("Output file was not created")
+        
+        # إرسال الملف للتحميل / Send file for download
+        logger.info(f"Sending processed file: {output_path}")
+        return send_file(
+            output_path,
+            as_attachment=True,
+            download_name='clean_video.mp4',
+            mimetype='video/mp4'
+        )
+        
+    except FileNotFoundError as e:
+        error_msg = str(e)
+        logger.error(f"File error: {error_msg}")
+        flash(f'خطأ في الملف: {error_msg}', 'error')
+        return redirect(url_for('index'))
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Processing error: {error_msg}")
+        flash(f'حدث خطأ أثناء المعالجة: {error_msg}', 'error')
+        return redirect(url_for('index'))
+        
+    finally:
+        # تنظيف الملف المؤقت / Cleanup uploaded file
+        try:
+            if 'input_path' in locals() and os.path.exists(input_path):
+                os.remove(input_path)
+                logger.info(f"Cleaned up: {input_path}")
+        except Exception as e:
+            logger.warning(f"Could not remove temp file: {e}")
+
+
+@app.route('/health')
+def health_check():
+    """
+    فحص صحة التطبيق / Health check endpoint
+    """
+    model_ok, _ = check_model_exists()
+    return {
+        'status': 'healthy' if model_ok else 'model_missing',
+        'model_path': MODEL_PATH,
+        'model_exists': model_ok,
+        'opencv_version': cv2.__version__
+    }
+
+
+# =============================================================================
+# تشغيل التطبيق / Run Application
+# =============================================================================
+
+if __name__ == '__main__':
+    # للتشغيل المحلي / For local development
+    # Render يستخدم gunicorn كما هو موضح في التعليق أدناه
+    # Render uses gunicorn as shown in comment below
+    
+    logger.info("Starting Flask application...")
+    logger.info(f"Upload folder: {UPLOAD_FOLDER}")
+    logger.info(f"Model path: {MODEL_PATH}")
+    
+    # التحقق من النموذج عند البدء / Check model on startup
+    model_ok, msg = check_model_exists()
+    if not model_ok:
+        logger.warning(msg)
+    
+    app.run(debug=True, host='0.0.0.0', port=5000)
+    
+    # للنشر على Render استخدم / For Render deployment use:
+    # Start Command: gunicorn app:app --bind 0.0.0.0:$PORT
