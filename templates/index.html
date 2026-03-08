@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>إزالة النصوص من الفيديو | Video Text Remover</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 600px;
+            width: 100%;
+            text-align: center;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 40px;
+            margin: 20px 0;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        
+        .upload-area:hover {
+            background: #f8f9ff;
+            border-color: #764ba2;
+        }
+        
+        .upload-icon {
+            font-size: 48px;
+            margin-bottom: 10px;
+        }
+        
+        input[type="file"] {
+            display: none;
+        }
+        
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            border-radius: 30px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.3s ease;
+            margin-top: 20px;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .loading {
+            display: none;
+            margin-top: 30px;
+        }
+        
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .progress-text {
+            color: #667eea;
+            font-weight: bold;
+        }
+        
+        .alert {
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .alert-error {
+            background: #fee;
+            color: #c33;
+            border: 1px solid #fcc;
+        }
+        
+        .alert-success {
+            background: #efe;
+            color: #3c3;
+            border: 1px solid #cfc;
+        }
+        
+        .info-box {
+            background: #f0f4ff;
+            border-right: 4px solid #667eea;
+            padding: 15px;
+            margin: 20px 0;
+            text-align: right;
+            border-radius: 5px;
+        }
+        
+        .info-box h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+        
+        .info-box ul {
+            list-style: none;
+            color: #555;
+            font-size: 14px;
+        }
+        
+        .info-box li {
+            margin: 5px 0;
+        }
+        
+        .info-box li:before {
+            content: "✓ ";
+            color: #667eea;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎬 إزالة النصوص من الفيديو</h1>
+        <p class="subtitle">Video Text Removal using OpenCV DB Model</p>
+        
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        
+        <div class="info-box">
+            <h3>📋 متطلبات الملف:</h3>
+            <ul>
+                <li>الصيغ المدعومة: MP4, AVI, MOV, MKV</li>
+                <li>الحجم الأقصى: 500 ميجابايت</li>
+                <li>النموذج المستخدم: DB_TD500_resnet18.onnx</li>
+            </ul>
+        </div>
+        
+        <form id="uploadForm" action="/process" method="post" enctype="multipart/form-data">
+            <div class="upload-area" onclick="document.getElementById('video').click()">
+                <div class="upload-icon">📁</div>
+                <p>اضغط هنا لاختيار ملف الفيديو</p>
+                <p style="color: #999; font-size: 12px; margin-top: 10px;">
+                    أو اسحب الملف هنا
+                </p>
+                <input type="file" id="video" name="video" accept="video/*" required onchange="updateFileName(this)">
+                <p id="fileName" style="margin-top: 15px; color: #667eea; font-weight: bold;"></p>
+            </div>
+            
+            <button type="submit" class="btn" id="submitBtn">
+                 بدء المعالجة / Start Processing
+            </button>
+        </form>
+        
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p class="progress-text">جاري معالجة الفيديو... / Processing video...</p>
+            <p style="color: #999; font-size: 12px; margin-top: 10px;">
+                قد تستغرق العملية بضع دقائق حسب طول الفيديو
+            </p>
+        </div>
+    </div>
+    
+    <script>
+        function updateFileName(input) {
+            if (input.files && input.files[0]) {
+                document.getElementById('fileName').textContent = 
+                    'الملف المختار: ' + input.files[0].name;
+            }
+        }
+        
+        document.getElementById('uploadForm').onsubmit = function(e) {
+            var fileInput = document.getElementById('video');
+            if (!fileInput.value) {
+                alert('الرجاء اختيار ملف فيديو أولاً / Please select a video file first');
+                e.preventDefault();
+                return false;
+            }
+            
+            // إظهار مؤشر التحميل / Show loading spinner
+            document.getElementById('loading').style.display = 'block';
+            document.getElementById('submitBtn').disabled = true;
+            document.getElementById('submitBtn').textContent = '⏳ جاري المعالجة... / Processing...';
+            
+            return true;
+        };
+        
+        // منع السحب والإفلات الافتراضي / Prevent default drag and drop
+        document.addEventListener('dragover', function(e) {
+            e.preventDefault();
+        });
+        
+        document.addEventListener('drop', function(e) {
+            e.preventDefault();
+            var files = e.dataTransfer.files;
+            if (files.length > 0) {
+                document.getElementById('video').files = files;
+                updateFileName(document.getElementById('video'));
+            }
+        });
+    </script>
+</body>
+  </html>
+  
